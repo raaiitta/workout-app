@@ -66,6 +66,11 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
 <section id="statsTab" class="hidden">
   <div class="card"><h2>集計</h2><div class="kpi"><div><b id="weekVol">0</b><span>今週</span></div><div><b id="monthVol">0</b><span>今月</span></div><div><b id="allVol">0</b><span>累計</span></div></div></div>
   <div class="card"><h3>種目別ベスト</h3><div id="bestList" class="list"></div></div>
+  <div class="card">
+    <h3>種目ごとの履歴</h3>
+    <label>種目を選択</label><select id="historyExercise" onchange="loadExerciseHistory()"></select>
+    <div id="exerciseHistory" class="list" style="margin-top:10px"><span class="muted">種目を選択してください。</span></div>
+  </div>
 </section>
 
 <section id="settingsTab" class="hidden">
@@ -73,6 +78,15 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
   <div id="addExerciseBox" class="card hidden">
     <h3>種目を追加</h3><label>部位</label><select id="newBodyPart"></select><label>種目名</label><input id="newExerciseName" placeholder="例：マシンロー"></input>
     <button class="btn primary" style="width:100%;margin-top:12px" onclick="addExercise()">追加する</button>
+  </div>
+  <div class="card">
+    <h3>登録済み種目の修正</h3>
+    <p class="muted">部位や種目名の間違いを修正できます。修正しても過去のトレーニング記録は残ります。</p>
+    <label>修正する種目</label><select id="editExercise" onchange="loadExerciseForEdit()"></select>
+    <label>部位</label><select id="editBodyPart"></select>
+    <label>種目名</label><input id="editExerciseName" placeholder="種目名">
+    <button class="btn primary" style="width:100%;margin-top:12px" onclick="updateExercise()">変更を保存</button>
+    <div id="editExerciseMsg" class="muted" style="margin-top:8px"></div>
   </div>
 </section>
 </main>
@@ -127,8 +141,26 @@ async function loadMaster(){
   bodyParts=r.data||[];
   $("bodyPart").innerHTML=bodyParts.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join("");
   $("newBodyPart").innerHTML=$("bodyPart").innerHTML;
+  $("editBodyPart").innerHTML=$("bodyPart").innerHTML;
   await loadExercises();
+  await loadAllExerciseOptions();
 }
+async function loadAllExerciseOptions(){
+  const r=await supabase.from("exercises").select("id,name,body_part_id").order("body_part_id").order("name");
+  if(r.error){showToast("種目一覧を取得できませんでした："+r.error.message);return}
+  const all=r.data||[];
+  window.allExercisesCache=all;
+  const options=all.map(x=>`<option value="${x.id}">${esc(bodyParts.find(b=>b.id===x.body_part_id)?.name||"未分類")}：${esc(x.name)}</option>`).join("");
+  $("historyExercise").innerHTML=options;
+  $("editExercise").innerHTML=options;
+  if(all.length){loadExerciseForEdit();loadExerciseHistory();}
+}
+window.loadExerciseForEdit=()=>{
+  const id=Number($("editExercise").value);
+  const ex=window.allExercisesCache?.find(x=>x.id===id);
+  // Cache is refreshed below when the selector is populated.
+  if(ex){$("editBodyPart").value=String(ex.body_part_id);$("editExerciseName").value=ex.name;}
+};
 async function loadExercises(){
   const part=Number($("bodyPart").value);
   const r=await supabase.from("exercises").select("id,name,body_part_id").eq("body_part_id",part).order("id");
@@ -180,13 +212,19 @@ window.saveWorkout=async function saveWorkout(){
   const ex=Number($("exercise").value), date=$("workoutDate").value;
   const rows=[...document.querySelectorAll(".set-row")].map((r,i)=>({set_number:i+1,weight:Number(r.querySelector(".weight").value||0),reps:Number(r.querySelector(".reps").value||0)})).filter(x=>x.weight>0&&x.reps>0);
   if(!ex||!date||!rows.length){showToast("種目とセットを入力してください");return}
-  let {data:session}=await supabase.from("workout_sessions").select("id").eq("user_id",currentUser.id).eq("workout_date",date).maybeSingle();
+  const sr=await supabase.from("workout_sessions").select("id").eq("user_id",currentUser.id).eq("workout_date",date).order("id");
+  if(sr.error){showToast("セッション取得エラー："+sr.error.message);return}
+  let sessions=sr.data||[];
+  let session=sessions[0];
   if(!session){
     const r=await supabase.from("workout_sessions").insert({user_id:currentUser.id,workout_date:date}).select("id").single();
     if(r.error){showToast("セッション保存エラー："+r.error.message);return} session=r.data;
+    sessions=[session];
   }
-  const {data:old}=await supabase.from("workout_sets").select("id").eq("session_id",session.id).eq("exercise_id",ex);
-  if(old?.length){await supabase.from("workout_sets").delete().eq("session_id",session.id).eq("exercise_id",ex)}
+  const sessionIds=sessions.map(x=>x.id);
+  // 同じ日付に重複セッションがあっても、該当種目のセットだけを置き換える。
+  const del=await supabase.from("workout_sets").delete().in("session_id",sessionIds).eq("exercise_id",ex);
+  if(del.error){showToast("既存セットの更新エラー："+del.error.message);return}
   const payload=rows.map(x=>({...x,session_id:session.id,exercise_id:ex}));
   const r=await supabase.from("workout_sets").insert(payload);
   if(r.error){showToast("セット保存エラー："+r.error.message);return}
@@ -202,6 +240,35 @@ async function getBestBefore(ex,ignoreSession){
   const totals={};(sets||[]).forEach(s=>totals[s.session_id]=(totals[s.session_id]||0)+Number(s.weight||0)*Number(s.reps||0));
   return Math.max(0,...Object.values(totals));
 }
+window.loadExerciseHistory=async()=>{
+  const ex=Number($("historyExercise").value);
+  if(!ex){$("exerciseHistory").innerHTML='<span class="muted">種目がありません。</span>';return}
+  $("exerciseHistory").innerHTML='<span class="muted">履歴を読み込み中…</span>';
+  const {data:sessions,error:se}=await supabase.from("workout_sessions").select("id,workout_date").eq("user_id",currentUser.id).order("workout_date",{ascending:false});
+  if(se){$("exerciseHistory").innerHTML=`<span class="error">履歴を取得できませんでした：${esc(se.message)}</span>`;return}
+  if(!sessions?.length){$("exerciseHistory").innerHTML='<span class="muted">まだ記録がありません。</span>';return}
+  const {data:sets,error}=await supabase.from("workout_sets").select("session_id,set_number,weight,reps").eq("exercise_id",ex).in("session_id",sessions.map(x=>x.id)).order("set_number");
+  if(error){$("exerciseHistory").innerHTML=`<span class="error">履歴を取得できませんでした：${esc(error.message)}</span>`;return}
+  const byDate={};
+  (sets||[]).forEach(x=>{
+    const date=sessions.find(s=>s.id===x.session_id)?.workout_date;
+    if(date){(byDate[date]??=[]).push(x)}
+  });
+  const dates=Object.keys(byDate).sort((a,b)=>b.localeCompare(a));
+  $("exerciseHistory").innerHTML=dates.map(date=>{
+    const arr=byDate[date].sort((a,b)=>a.set_number-b.set_number);
+    const vol=arr.reduce((sum,x)=>sum+Number(x.weight||0)*Number(x.reps||0),0);
+    return `<div class="item"><strong>${date}</strong>${arr.map((x,i)=>`<div>第${Number(x.set_number)||i+1}セット：${formatNum(x.weight)}kg × ${formatNum(x.reps)}回</div>`).join("")}<div class="muted" style="margin-top:6px">合計ボリューム：${formatNum(vol)} kg・回</div></div>`;
+  }).join("")||'<span class="muted">この種目の記録はまだありません。</span>';
+};
+window.updateExercise=async()=>{
+  const id=Number($("editExercise").value), name=$("editExerciseName").value.trim(), part=Number($("editBodyPart").value);
+  if(!id||!name||!part){msg($("editExerciseMsg"),"種目・部位・種目名を確認してください","error");return}
+  const {error}=await supabase.from("exercises").update({name,body_part_id:part}).eq("id",id);
+  if(error){msg($("editExerciseMsg"),"変更できませんでした："+error.message,"error");return}
+  msg($("editExerciseMsg"),"変更を保存しました。過去の記録はそのままです","success");
+  await loadAllExerciseOptions();await loadExercises();await loadStats();
+};
 async function refreshAll(){await loadStats();await renderCalendar()}
 async function loadStats(){
   const {data:sessions}=await supabase.from("workout_sessions").select("id,workout_date").eq("user_id",currentUser.id);
@@ -240,23 +307,23 @@ window.selectDay=async date=>{
 
   // 日付を選んでも「今日のトレーニング」画面へ移動せず、
   // カレンダー内に選択日の詳細を表示する。
-  const {data:s,error:sessionError}=await supabase
+  const {data:sessions,error:sessionError}=await supabase
     .from("workout_sessions").select("id")
-    .eq("user_id",currentUser.id).eq("workout_date",date).maybeSingle();
+    .eq("user_id",currentUser.id).eq("workout_date",date).order("id");
 
   if(sessionError){
     $("dayRecords").innerHTML=`<span class="error">記録を取得できませんでした：${esc(sessionError.message)}</span>`;
     return;
   }
-  if(!s){
+  if(!sessions?.length){
     $("dayRecords").innerHTML='<span class="muted">この日の記録はありません。</span>';
     return;
   }
 
   const {data:sets,error:setsError}=await supabase
     .from("workout_sets")
-    .select("exercise_id,set_number,weight,reps")
-    .eq("session_id",s.id).order("exercise_id").order("set_number");
+    .select("exercise_id,set_number,weight,reps,session_id")
+    .in("session_id",sessions.map(x=>x.id)).order("exercise_id").order("set_number");
 
   if(setsError){
     $("dayRecords").innerHTML=`<span class="error">セット詳細を取得できませんでした：${esc(setsError.message)}</span>`;
