@@ -68,18 +68,18 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
 
 <section id="trainingTab" class="hidden">
   <div class="card">
-    <div class="row"><h2>今日のトレーニング</h2><button class="btn small" onclick="showTab('homeTab',document.querySelector('.tabs button'))">ホームへ</button></div>
+    <div class="row"><h2 id="trainingTitle">今日のトレーニング</h2><button class="btn small" onclick="showTab('homeTab',document.querySelector('.tabs button'))">ホームへ</button></div>
     <label>日付</label><input id="workoutDate" type="date">
     <label>部位</label><select id="bodyPart" onchange="loadExercises(true)"></select>
     <label>種目</label><select id="exercise" onchange="onExerciseChange()"></select>
-    <div id="previous" class="notice hidden"></div>
+    <div id="previous" class="notice hidden"></div><button id="copyPreviousBtn" class="btn small hidden" style="width:100%;margin-top:8px" onclick="copyPreviousRecord()">前回の記録を複製</button>
   </div>
   <div class="card">
     <div class="row" style="justify-content:space-between"><h3>セット</h3><button class="btn small" onclick="addSet()">＋セット</button></div>
     <div class="set-head"><div>SET</div><div>重量 kg</div><div>回数</div><div></div></div>
     <div id="sets"></div>
     <div class="kpi" style="margin-top:12px"><div><b id="volume">0</b><span>総ボリューム</span></div><div><b id="setCount">0</b><span>セット数</span></div><div><b id="bestVolume">-</b><span>過去最高</span></div></div>
-    <button class="btn primary" style="width:100%;margin-top:14px" onclick="saveWorkout()">記録を保存</button>
+    <button id="saveWorkoutBtn" class="btn primary" style="width:100%;margin-top:14px" onclick="saveWorkout()">記録を保存</button>
   </div>
 </section>
 
@@ -90,7 +90,7 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
 
 <section id="statsTab" class="hidden">
   <div class="card"><h2>集計</h2><div class="kpi"><div><b id="weekVol">0</b><span>今週</span></div><div><b id="monthVol">0</b><span>今月</span></div><div><b id="allVol">0</b><span>累計</span></div></div></div>
-  <div class="card"><h3>種目別履歴</h3><p class="muted">種目をタップすると、日付ごとの重量・回数・セット数を確認できます。</p><div id="bestList" class="list"></div></div>
+  <div class="card"><h3>種目別履歴</h3><p class="muted">部位を選択してから種目を選ぶと、日付ごとの重量・回数・セット数を確認できます。</p><label>部位</label><select id="historyBodyPart" onchange="renderExerciseHistoryList()"><option value="">部位を選択</option></select><div id="bestList" class="list" style="margin-top:10px"></div></div>
   <div id="exerciseHistoryBox" class="card hidden"><div class="row"><h3 id="exerciseHistoryTitle">種目の履歴</h3><button class="btn small" onclick="closeExerciseHistory()">閉じる</button></div><div id="exerciseHistory" class="list"></div></div>
 </section>
 
@@ -120,7 +120,7 @@ const SUPABASE_URL = "https://kksvzdqtueoiengzvgan.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_YNO1159xP98uQ5q9M8fkJQ_MtwnP0ov";
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
-let bodyParts=[], exercises=[], currentMonth=new Date(new Date().getFullYear(),new Date().getMonth(),1), selectedDate=null, currentUser=null;
+let bodyParts=[], exercises=[], allExercisesCache=[], exerciseVolumes={}, currentMonth=new Date(new Date().getFullYear(),new Date().getMonth(),1), selectedDate=null, currentUser=null, editingWorkoutDate=null;
 const $=id=>document.getElementById(id);
 const todayStr=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
 $("workoutDate").value=todayStr();
@@ -154,14 +154,14 @@ window.login=async()=>{
   if(error)msg($("loginMsg"),"ログインできませんでした："+error.message,"error");
 };
 window.logout=async()=>{await supabase.auth.signOut()};
-window.startTraining=()=>{showTab("trainingTab",document.querySelector('[data-tab="trainingTab"]'));$("workoutDate").value=todayStr()};
+window.startTraining=()=>{editingWorkoutDate=null;$("trainingTitle").textContent="今日のトレーニング";$("saveWorkoutBtn").textContent="記録を保存";showTab("trainingTab",document.querySelector('[data-tab="trainingTab"]'));$("workoutDate").value=todayStr();clearSetInputs(5);showPrevious()};
 
 async function loadMaster(){
   const r=await supabase.from("body_parts").select("id,name").order("id");
   if(r.error){showToast("部位一覧を取得できません："+r.error.message);return}
   bodyParts=r.data||[];
   const options=bodyParts.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join("");
-  $("bodyPart").innerHTML=options;$("newBodyPart").innerHTML=options;$("editBodyPart").innerHTML=options;
+  $("bodyPart").innerHTML=options;$("newBodyPart").innerHTML=options;$("editBodyPart").innerHTML=options;$("historyBodyPart").innerHTML="<option value=\"\">部位を選択</option>"+options;
   await loadExercises(false);
   await populateAllExercisesForEditor();
 }
@@ -189,13 +189,13 @@ $("workoutDate").addEventListener("change",()=>{clearSetInputs(5);showPrevious()
 
 window.showPrevious=async()=>{
   const ex=Number($("exercise").value),date=$("workoutDate").value;
-  if(!ex){$("previous").classList.add("hidden");$("bestVolume").textContent="-";return}
+  if(!ex){$("previous").classList.add("hidden");$("copyPreviousBtn").classList.add("hidden");$("bestVolume").textContent="-";return}
   const prev=await getPreviousSession(ex,date);
   if(prev.error){$("previous").classList.remove("hidden");$("previous").textContent="前回の記録を取得できません："+prev.error;return}
   if(prev.sets.length){
-    $("previous").classList.remove("hidden");
+    $("previous").classList.remove("hidden");$("copyPreviousBtn").classList.remove("hidden");
     $("previous").innerHTML=`<strong>前回：${esc(dateLabel(prev.date))}</strong><br>${prev.sets.map((s,i)=>`第${Number(s.set_number)||i+1}セット：${formatNum(s.weight)}kg × ${formatNum(s.reps)}回`).join("<br>")}`;
-  }else{$("previous").classList.add("hidden");$("previous").textContent=""}
+  }else{$("previous").classList.add("hidden");$("copyPreviousBtn").classList.add("hidden");$("previous").textContent=""}
   await updateBestVolume(ex);
 };
 async function getPreviousSession(ex,date){
@@ -213,6 +213,17 @@ async function getPreviousSession(ex,date){
   const rows=sets.filter(s=>latestIds.has(s.session_id)).sort((a,b)=>Number(a.set_number)-Number(b.set_number));
   return {sets:rows,date:latest};
 }
+window.copyPreviousRecord=async()=>{
+  const ex=Number($("exercise").value),date=$("workoutDate").value;
+  if(!ex||!date)return;
+  const prev=await getPreviousSession(ex,date);
+  if(prev.error){showToast("前回の記録を複製できません："+prev.error);return}
+  if(!prev.sets.length){showToast("複製できる前回記録がありません");return}
+  $("sets").innerHTML="";
+  prev.sets.forEach(s=>addSetRow(s.weight,s.reps));
+  updateVolume();
+  showToast("前回の記録を入力欄に複製しました。保存前に内容を確認してください。");
+};
 async function addSetRow(weight="",reps=""){
   const wrap=document.createElement("div");wrap.className="set-row";
   wrap.innerHTML=`<div class="setno"></div><input type="number" min="0" step="0.1" class="weight" placeholder="0" value="${esc(weight)}"><input type="number" min="0" step="1" class="reps" placeholder="0" value="${esc(reps)}"><button class="btn danger small" aria-label="セット削除">×</button>`;
@@ -254,14 +265,30 @@ window.saveWorkout=async()=>{
     sessionId=inserted.data?.[0]?.id;
   }
   if(!sessionId){showToast("セッションIDを取得できませんでした");return}
+  // 既存セットを先に全削除しない。既存行を更新し、不足分を追加してから余分な行を削除する。
   const dayIds=(daySessions||[]).map(s=>s.id);
-  if(dayIds.length){
-    const {error:deleteError}=await supabase.from("workout_sets").delete().in("session_id",dayIds).eq("exercise_id",ex);
-    if(deleteError){showToast("既存記録の更新準備に失敗："+deleteError.message);return}
+  const {data:existingSets,error:existingError}=dayIds.length
+    ? await supabase.from("workout_sets").select("session_id,set_number").in("session_id",dayIds).eq("exercise_id",ex).order("set_number")
+    : {data:[],error:null};
+  if(existingError){showToast("既存記録の確認に失敗："+existingError.message);return}
+  const existing=[...(existingSets||[])].sort((a,b)=>Number(a.set_number)-Number(b.set_number));
+  for(let i=0;i<rows.length;i++){
+    const target=existing[i];
+    if(target){
+      const upd=await supabase.from("workout_sets").update({weight:rows[i].weight,reps:rows[i].reps,set_number:rows[i].set_number}).eq("session_id",target.session_id).eq("exercise_id",ex).eq("set_number",target.set_number);
+      if(upd.error){showToast("セット更新に失敗："+upd.error.message+"。未処理のセットは削除していません。");return}
+    }else{
+      const ins=await supabase.from("workout_sets").insert({...rows[i],session_id:sessionId,exercise_id:ex});
+      if(ins.error){showToast("セット追加に失敗："+ins.error.message+"。既存セットは削除していません。");return}
+    }
   }
-  const payload=rows.map(x=>({...x,session_id:sessionId,exercise_id:ex}));
-  const saved=await supabase.from("workout_sets").insert(payload);
-  if(saved.error){showToast("セット保存エラー："+saved.error.message);return}
+  // 全ての更新・追加が成功した後に限り、入力セット数を超える行を削除する。
+  for(let i=rows.length;i<existing.length;i++){
+    const extra=existing[i];
+    const del=await supabase.from("workout_sets").delete().eq("session_id",extra.session_id).eq("exercise_id",ex).eq("set_number",extra.set_number);
+    if(del.error){showToast("余分なセットの整理に失敗："+del.error.message+"。記録の一部は更新済みです。");return}
+  }
+  editingWorkoutDate=null;$("trainingTitle").textContent="今日のトレーニング";$("saveWorkoutBtn").textContent="記録を保存";
   showToast("保存しました！");
   await updateBestVolume(ex);await refreshAll();
 };
@@ -301,20 +328,28 @@ async function loadStats(){
 
   const {data:allExercises,error:exerciseError}=await supabase.from("exercises").select("id,name,body_part_id");
   if(exerciseError){showToast("種目名を取得できません："+exerciseError.message);return}
+  allExercisesCache=allExercises||[];
   const names=Object.fromEntries((allExercises||[]).map(x=>[x.id,x.name]));
   const bodyNames=Object.fromEntries(bodyParts.map(x=>[x.id,x.name]));
-  $("bestList").innerHTML=Object.entries(byExercise).sort((a,b)=>b[1]-a[1]).map(([id,v])=>`
-    <button class="history-button" onclick="openExerciseHistory(${Number(id)})">
-      <strong>${esc(names[id]||"種目")}</strong><span class="muted">${esc(bodyNames[(allExercises||[]).find(x=>String(x.id)===String(id))?.body_part_id]||"")} ・ 累計 ${formatNum(v)} kg・回</span>
-    </button>`).join("")||'<span class="muted">まだ記録がありません。</span>';
+  exerciseVolumes=byExercise;
+  renderExerciseHistoryList();
 
   const dateSessions=groupBy(sessions,"workout_date");
   const recentDates=Object.keys(dateSessions).sort().reverse().slice(0,5);
   $("recentWorkouts").innerHTML=recentDates.map(d=>{
     const volume=dateSessions[d].reduce((sum,s)=>sum+(bySession[s.id]||0),0);
-    return `<div class="item"><strong>${esc(dateLabel(d))}</strong><span class="muted">総ボリューム：${formatNum(volume)} kg・回</span></div>`;
+    return `<button class="history-button" onclick="openDayFromHome('${d}')"><strong>${esc(dateLabel(d))}</strong><span class="muted">総ボリューム：${formatNum(volume)} kg・回</span><span class="muted" style="display:block;margin-top:5px">タップして記録を確認 ›</span></button>`;
   }).join("")||'<span class="muted">まだ記録がありません。</span>';
 }
+window.renderExerciseHistoryList=()=>{
+  const part=Number($("historyBodyPart").value);
+  if(!part){$("bestList").innerHTML='<span class="muted">部位を選択してください。</span>';return}
+  const ids=Object.keys(exerciseVolumes).filter(id=>allExercisesCache.some(x=>String(x.id)===String(id)&&Number(x.body_part_id)===part));
+  $("bestList").innerHTML=ids.sort((a,b)=>(exerciseVolumes[b]||0)-(exerciseVolumes[a]||0)).map(id=>{
+    const ex=allExercisesCache.find(x=>String(x.id)===String(id));
+    return `<button class="history-button" onclick="openExerciseHistory(${Number(id)})"><strong>${esc(ex?.name||"種目")}</strong><span class="muted">累計 ${formatNum(exerciseVolumes[id])} kg・回</span></button>`;
+  }).join("")||'<span class="muted">この部位の記録はまだありません。</span>';
+};
 window.openExerciseHistory=async(exId)=>{
   const exercise=(await supabase.from("exercises").select("id,name").eq("id",exId).limit(1)).data?.[0];
   $("exerciseHistoryTitle").textContent=(exercise?.name||"種目")+" の履歴";
@@ -351,6 +386,7 @@ async function renderCalendar(){
   $("calendar").innerHTML=out;
 }
 window.changeMonth=d=>{currentMonth=new Date(currentMonth.getFullYear(),currentMonth.getMonth()+d,1);renderCalendar()};
+window.openDayFromHome=date=>{currentMonth=new Date(Number(date.slice(0,4)),Number(date.slice(5,7))-1,1);showTab("calendarTab",document.querySelector('[data-tab="calendarTab"]'));selectDay(date)};
 window.selectDay=async date=>{
   selectedDate=date;const [y,m,d]=date.split("-").map(Number);
   $("selectedDateTitle").textContent=`${y}年${m}月${d}日の記録`;$("dayRecords").innerHTML='<span class="muted">記録を読み込み中…</span>';
@@ -360,15 +396,38 @@ window.selectDay=async date=>{
   const {data:sets,error:setError}=await supabase.from("workout_sets").select("session_id,exercise_id,set_number,weight,reps").in("session_id",sessions.map(s=>s.id)).order("exercise_id").order("set_number");
   if(setError){$("dayRecords").innerHTML=`<span class="error">セット詳細を取得できませんでした：${esc(setError.message)}</span>`;return}
   const exerciseIds=[...new Set((sets||[]).map(x=>x.exercise_id))];
-  const {data:exs,error:exError}=await supabase.from("exercises").select("id,name").in("id",exerciseIds.length?exerciseIds:[-1]);
+  const {data:exs,error:exError}=await supabase.from("exercises").select("id,name,body_part_id").in("id",exerciseIds.length?exerciseIds:[-1]);
   if(exError){$("dayRecords").innerHTML=`<span class="error">種目名を取得できませんでした：${esc(exError.message)}</span>`;return}
   const names=Object.fromEntries((exs||[]).map(x=>[x.id,x.name]));
   const groups=groupBy(sets||[],"exercise_id");
   $("dayRecords").innerHTML=Object.entries(groups).map(([id,arr])=>{
     const volume=arr.reduce((sum,x)=>sum+Number(x.weight||0)*Number(x.reps||0),0);
-    return `<div class="item"><strong>${esc(names[id]||"種目")}</strong>${arr.map((x,i)=>`<div>第${Number(x.set_number)||i+1}セット：${formatNum(x.weight)}kg × ${formatNum(x.reps)}回</div>`).join("")}<div class="muted" style="margin-top:6px">合計ボリューム：${formatNum(volume)} kg・回</div></div>`;
+    return `<div class="item"><strong>${esc(names[id]||"種目")}</strong>${arr.map((x,i)=>`<div>第${Number(x.set_number)||i+1}セット：${formatNum(x.weight)}kg × ${formatNum(x.reps)}回</div>`).join("")}<div class="muted" style="margin-top:6px">合計ボリューム：${formatNum(volume)} kg・回</div><button class="btn small primary" style="width:100%;margin-top:9px" onclick="editDayExercise('${date}',${Number(id)})">この種目を編集</button></div>`;
   }).join("")||'<span class="muted">この日のセット記録はありません。</span>';
   await renderCalendar();
+};
+window.editDayExercise=async(date,exerciseId)=>{
+  const {data:sessions,error}=await supabase.from("workout_sessions").select("id").eq("user_id",currentUser.id).eq("workout_date",date);
+  if(error){showToast("編集対象を取得できません："+error.message);return}
+  if(!sessions?.length){showToast("この日のセッションが見つかりません");return}
+  const {data:sets,error:setError}=await supabase.from("workout_sets").select("set_number,weight,reps").in("session_id",sessions.map(x=>x.id)).eq("exercise_id",exerciseId).order("set_number");
+  if(setError){showToast("編集するセットを取得できません："+setError.message);return}
+  const ex=await supabase.from("exercises").select("id,name,body_part_id").eq("id",exerciseId).limit(1);
+  if(ex.error||!ex.data?.length){showToast("種目情報を取得できません");return}
+  const item=ex.data[0];
+  $("workoutDate").value=date;
+  $("bodyPart").value=String(item.body_part_id);
+  await loadExercises(false);
+  $("exercise").value=String(exerciseId);
+  await showPrevious();
+  $("sets").innerHTML="";
+  (sets||[]).forEach(x=>addSetRow(x.weight,x.reps));
+  if(!sets?.length)clearSetInputs(5);
+  editingWorkoutDate=date;
+  $("trainingTitle").textContent=dateLabel(date)+"の記録を編集";
+  $("saveWorkoutBtn").textContent="変更を保存";
+  showTab("trainingTab",document.querySelector('[data-tab="trainingTab"]'));
+  showToast("過去の記録を編集できます。保存すると選択日の記録が更新されます。");
 };
 window.showTab=(id,btn)=>{
   ["homeTab","trainingTab","calendarTab","statsTab","settingsTab"].forEach(x=>$(x).classList.toggle("hidden",x!==id));
