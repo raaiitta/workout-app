@@ -8,7 +8,8 @@
 <style>
 :root{--bg:#f4f6f8;--card:#fff;--text:#17202a;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--danger:#dc2626;--ok:#059669}
 *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP",sans-serif;background:var(--bg);color:var(--text)}
-button,input,select{font:inherit}button{border:0;cursor:pointer}.hidden{display:none!important}
+button,input,select,textarea{font:inherit}
+textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--text);resize:vertical;min-height:88px}button{border:0;cursor:pointer}.hidden{display:none!important}
 header{position:sticky;top:0;z-index:10;background:#111827;color:#fff;padding:14px 16px;display:flex;align-items:center;justify-content:space-between}
 header h1{font-size:18px;margin:0}.header-left{display:flex;align-items:center;gap:10px;min-width:0}.header-back{background:#374151;color:#fff;border:1px solid #4b5563;border-radius:9px;padding:7px 10px;font-size:13px;font-weight:600;white-space:nowrap}.userbar{font-size:12px;opacity:.85}
 main{max-width:760px;margin:0 auto;padding:16px 14px 104px}.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:15px;margin-bottom:12px;box-shadow:0 1px 3px #00000008}
@@ -88,6 +89,13 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
     <label>種目</label><select id="exercise" onchange="onExerciseChange()"></select>
     <div id="previous" class="notice hidden"></div><button id="copyPreviousBtn" class="btn small hidden" style="width:100%;margin-top:8px" onclick="copyPreviousRecord()">前回の記録を複製</button>
   </div>
+  <div class="card" id="exerciseNoteCard">
+    <h3>この種目のフォームメモ</h3>
+    <p class="muted">フォームのポイントや意識することを記録できます。次回も同じ種目を選ぶと表示されます。</p>
+    <textarea id="exerciseNote" rows="4" maxlength="2000" placeholder="例：肩甲骨を寄せて胸を張る。下ろす動作はゆっくり。"></textarea>
+    <div id="exerciseNoteStatus" class="muted" style="font-size:12px;margin-top:6px">種目を選択するとメモが表示されます。</div>
+    <button class="btn small" style="width:100%;margin-top:10px" onclick="saveExerciseNote()">メモを保存</button>
+  </div>
   <div class="card">
     <div class="row" style="justify-content:space-between"><h3>セット</h3><button class="btn small" onclick="addSet()">＋セット</button></div>
     <div class="set-head"><div>SET</div><div>重量 kg</div><div>回数</div><div></div></div>
@@ -135,7 +143,7 @@ const SUPABASE_URL = "https://kksvzdqtueoiengzvgan.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_YNO1159xP98uQ5q9M8fkJQ_MtwnP0ov";
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
-let bodyParts=[], exercises=[], allExercisesCache=[], exerciseVolumes={}, currentMonth=new Date(new Date().getFullYear(),new Date().getMonth(),1), selectedDate=null, currentUser=null, editingWorkoutDate=null, activeTab="homeTab", previousTab="homeTab", editorDirty=false;
+let bodyParts=[], exercises=[], allExercisesCache=[], exerciseVolumes={}, noteExerciseId=null, exerciseNoteDirty=false, currentMonth=new Date(new Date().getFullYear(),new Date().getMonth(),1), selectedDate=null, currentUser=null, editingWorkoutDate=null, activeTab="homeTab", previousTab="homeTab", editorDirty=false;
 const $=id=>document.getElementById(id);
 const todayStr=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
 $("workoutDate").value=todayStr();
@@ -198,6 +206,7 @@ async function loadMaster(){
   await populateAllExercisesForEditor();
 }
 async function loadExercises(resetInputs=true){
+  if(exerciseNoteDirty) await saveExerciseNote();
   const part=Number($("bodyPart").value);
   if(!part){$("exercise").innerHTML="";return}
   const r=await supabase.from("exercises").select("id,name,body_part_id").eq("body_part_id",part).order("id");
@@ -207,16 +216,70 @@ async function loadExercises(resetInputs=true){
   if(resetInputs) clearSetInputs(5);
   await showPrevious();
   populateExerciseEditor();
+  await loadExerciseNote();
 }
 function clearSetInputs(count=5){
   $("sets").innerHTML="";
   for(let i=0;i<count;i++) addSetRow();
   updateVolume();
 }
+window.loadExerciseNote=async()=>{
+  const ex=Number($("exercise").value);
+  noteExerciseId=ex||null;
+  exerciseNoteDirty=false;
+  $("exerciseNote").value="";
+  if(!ex||!currentUser){
+    $("exerciseNote").disabled=true;
+    $("exerciseNoteStatus").textContent="種目を選択するとメモが表示されます。";
+    return;
+  }
+  $("exerciseNote").disabled=false;
+  $("exerciseNoteStatus").textContent="メモを読み込み中…";
+  const r=await supabase.from("exercise_notes").select("note").eq("exercise_id",ex).eq("owner_id",currentUser.id).maybeSingle();
+  if(r.error){
+    $("exerciseNoteStatus").textContent="メモを取得できません。テーブル設定を確認してください。";
+    showToast("フォームメモの取得に失敗："+r.error.message);
+    return;
+  }
+  $("exerciseNote").value=r.data?.note||"";
+  $("exerciseNoteStatus").textContent=r.data?.note?"保存済みのメモ":"まだメモはありません。";
+};
+window.saveExerciseNote=async()=>{
+  const ex=noteExerciseId;
+  if(!ex||!currentUser){showToast("先に種目を選択してください");return}
+  const note=$("exerciseNote").value.trim();
+  $("exerciseNoteStatus").textContent="保存中…";
+  let r;
+  if(note){
+    r=await supabase.from("exercise_notes").upsert(
+      {exercise_id:ex,owner_id:currentUser.id,note},
+      {onConflict:"exercise_id,owner_id"}
+    );
+  }else{
+    r=await supabase.from("exercise_notes").delete().eq("exercise_id",ex).eq("owner_id",currentUser.id);
+  }
+  if(r.error){
+    $("exerciseNoteStatus").textContent="保存できませんでした。";
+    showToast("フォームメモの保存に失敗："+r.error.message);
+    return false;
+  }
+  exerciseNoteDirty=false;
+  $("exerciseNoteStatus").textContent=note?"保存しました":"メモを削除しました";
+  showToast(note?"フォームメモを保存しました":"フォームメモを削除しました");
+  return true;
+};
+$("exerciseNote").addEventListener("input",()=>{
+  if(noteExerciseId){exerciseNoteDirty=true;$("exerciseNoteStatus").textContent="未保存の変更があります";}
+});
 window.onExerciseChange=async()=>{
   editorDirty=true;
+  if(exerciseNoteDirty){
+    const saved=await saveExerciseNote();
+    if(!saved){$("exercise").value=String(noteExerciseId);return}
+  }
   clearSetInputs(5);
   await showPrevious();
+  await loadExerciseNote();
 };
 $("workoutDate").addEventListener("change",()=>{if(!$("trainingEditorView").classList.contains("hidden"))editorDirty=true;clearSetInputs(5);showPrevious()});
 $("bodyPart").addEventListener("change",()=>{if(!$("trainingEditorView").classList.contains("hidden"))editorDirty=true});
