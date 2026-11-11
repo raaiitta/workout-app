@@ -39,6 +39,7 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
 .icon-btn{width:40px;height:40px;border-radius:10px;background:#f3f4f6;color:#374151;font-size:20px;display:inline-flex;align-items:center;justify-content:center;flex:none}
 .part-status-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
 .part-status{background:#f8fafc;border:1px solid var(--line);border-radius:11px;padding:11px;text-align:left;width:100%;color:var(--text)}
+.pr-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px}.pr-cell{background:#f8fafc;border-radius:8px;padding:7px 5px;text-align:center;min-width:0}.pr-cell b{display:block;font-size:14px;overflow-wrap:anywhere}.pr-cell span{display:block;color:var(--muted);font-size:10px;margin-top:2px}
 .part-status b{display:block;font-size:15px;margin-bottom:4px}.part-status span{font-size:12px;color:var(--muted)}
 @media(max-width:390px){.tabs button{font-size:11px;padding:8px 1px}.tab-icon{font-size:21px}.tab-label{font-size:11px}.home-stat b{font-size:20px}}
 </style>
@@ -113,7 +114,7 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
 
 <section id="statsTab" class="hidden">
   <div class="card"><h2>集計</h2><div class="kpi"><div><b id="weekVol">0</b><span>今週</span></div><div><b id="monthVol">0</b><span>今月</span></div><div><b id="allVol">0</b><span>累計</span></div></div></div>
-  <div class="card"><h3>種目別履歴</h3><p class="muted">部位を選択してから種目を選ぶと、日付ごとの重量・回数・セット数を確認できます。</p><label>部位</label><select id="historyBodyPart" onchange="renderExerciseHistoryList()"><option value="">部位を選択</option></select><div id="bestList" class="list" style="margin-top:10px"></div></div>
+  <div class="card"><h3>種目別履歴</h3><p class="muted">部位を選択すると種目ごとの自己ベスト（PR）を確認できます。種目をタップすると日付ごとの記録を確認できます。</p><label>部位</label><select id="historyBodyPart" onchange="renderExerciseHistoryList()"><option value="">部位を選択</option></select><div id="bestList" class="list" style="margin-top:10px"></div></div>
   <div id="exerciseHistoryBox" class="card hidden"><div class="row"><h3 id="exerciseHistoryTitle">種目の履歴</h3><button class="btn small" onclick="closeExerciseHistory()">閉じる</button></div><div id="exerciseHistory" class="list"></div></div>
 </section>
 
@@ -143,7 +144,7 @@ const SUPABASE_URL = "https://kksvzdqtueoiengzvgan.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_YNO1159xP98uQ5q9M8fkJQ_MtwnP0ov";
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
-let bodyParts=[], exercises=[], allExercisesCache=[], exerciseVolumes={}, noteExerciseId=null, exerciseNoteDirty=false, currentMonth=new Date(new Date().getFullYear(),new Date().getMonth(),1), selectedDate=null, currentUser=null, editingWorkoutDate=null, activeTab="homeTab", previousTab="homeTab", editorDirty=false;
+let bodyParts=[], exercises=[], allExercisesCache=[], exerciseVolumes={}, exercisePRs={}, noteExerciseId=null, exerciseNoteDirty=false, currentMonth=new Date(new Date().getFullYear(),new Date().getMonth(),1), selectedDate=null, currentUser=null, editingWorkoutDate=null, activeTab="homeTab", previousTab="homeTab", editorDirty=false;
 const $=id=>document.getElementById(id);
 const todayStr=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
 $("workoutDate").value=todayStr();
@@ -407,12 +408,16 @@ async function loadStats(){
   const {data:sets,error:setError}=await supabase.from("workout_sets").select("session_id,exercise_id,weight,reps").in("session_id",ids);
   if(setError){showToast("セット集計エラー："+setError.message);return}
   const sessionMap=Object.fromEntries(sessions.map(s=>[s.id,s]));
-  const byDate={},byExercise={},bySession={};let all=0;
+  const byDate={},byExercise={},bySession={},prByExercise={};let all=0;
   (sets||[]).forEach(s=>{
-    const v=Number(s.weight||0)*Number(s.reps||0),date=sessionMap[s.session_id]?.workout_date;
+    const weight=Number(s.weight||0),reps=Number(s.reps||0),v=weight*reps,date=sessionMap[s.session_id]?.workout_date;
     if(date)byDate[date]=(byDate[date]||0)+v;
     bySession[s.session_id]=(bySession[s.session_id]||0)+v;
     byExercise[s.exercise_id]=(byExercise[s.exercise_id]||0)+v;all+=v;
+    if(weight>0&&reps>0){
+      const pr=prByExercise[s.exercise_id]||(prByExercise[s.exercise_id]={maxWeight:0,maxReps:0,bestSetVolume:0});
+      pr.maxWeight=Math.max(pr.maxWeight,weight);pr.maxReps=Math.max(pr.maxReps,reps);pr.bestSetVolume=Math.max(pr.bestSetVolume,v);
+    }
   });
   const now=new Date(),mondayDate=new Date(now);mondayDate.setDate(now.getDate()-((now.getDay()+6)%7));
   const monday=`${mondayDate.getFullYear()}-${String(mondayDate.getMonth()+1).padStart(2,"0")}-${String(mondayDate.getDate()).padStart(2,"0")}`;
@@ -433,7 +438,7 @@ async function loadStats(){
   const latestByPart={};
   (sets||[]).forEach(s=>{const ex=allExercises.find(x=>String(x.id)===String(s.exercise_id));const d=sessionMap[s.session_id]?.workout_date;if(ex&&d&&(!latestByPart[ex.body_part_id]||d>latestByPart[ex.body_part_id]))latestByPart[ex.body_part_id]=d});
   $("homePartStatus").innerHTML=bodyParts.map(part=>{const d=latestByPart[part.id];return `<button class="part-status" onclick="openPartCalendar(${Number(part.id)})"><b>${esc(part.name)}</b><span>${d?`${esc(dateLabel(d))} ・ ${esc(elapsedLabel(d))}`:"未実施"}</span></button>`}).join("")||'<span class="muted">部位が登録されていません。</span>';
-  exerciseVolumes=byExercise;
+  exerciseVolumes=byExercise;exercisePRs=prByExercise;
   renderExerciseHistoryList();
 
   const dateSessions=groupBy(sessions,"workout_date");
@@ -456,8 +461,8 @@ window.renderExerciseHistoryList=()=>{
   if(!part){$("bestList").innerHTML='<span class="muted">部位を選択してください。</span>';return}
   const ids=Object.keys(exerciseVolumes).filter(id=>allExercisesCache.some(x=>String(x.id)===String(id)&&Number(x.body_part_id)===part));
   $("bestList").innerHTML=ids.sort((a,b)=>(exerciseVolumes[b]||0)-(exerciseVolumes[a]||0)).map(id=>{
-    const ex=allExercisesCache.find(x=>String(x.id)===String(id));
-    return `<button class="history-button" onclick="openExerciseHistory(${Number(id)})"><strong>${esc(ex?.name||"種目")}</strong></button>`;
+    const ex=allExercisesCache.find(x=>String(x.id)===String(id)),pr=exercisePRs[id]||{maxWeight:0,maxReps:0,bestSetVolume:0};
+    return `<button class="history-button" onclick="openExerciseHistory(${Number(id)})"><strong>${esc(ex?.name||"種目")}</strong><div class="pr-grid"><div class="pr-cell"><b>${formatNum(pr.maxWeight)}kg</b><span>最大重量</span></div><div class="pr-cell"><b>${formatNum(pr.maxReps)}回</b><span>最大回数</span></div><div class="pr-cell"><b>${formatNum(pr.bestSetVolume)}</b><span>ベストセット kg・回</span></div></div><div class="muted" style="margin-top:7px">タップして履歴を見る ›</div></button>`;
   }).join("")||'<span class="muted">この部位の記録はまだありません。</span>';
 };
 window.openExerciseHistory=async(exId)=>{
