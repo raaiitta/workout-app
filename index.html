@@ -67,7 +67,7 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
       <div class="home-stat"><span>今月の総ボリューム</span><b id="homeMonthVol">0</b><small>kg・回</small></div>
       <div class="home-stat"><span>累計トレーニング</span><b id="homeTotalDays">0日</b><small>記録がある日数</small></div>
     </div>
-    <button class="btn primary" style="width:100%;margin-top:14px" onclick="startTraining()">＋ 今日のトレーニングを記録</button>
+    <button class="btn primary" style="width:100%;margin-top:14px" onclick="openTodayTraining()">今日のトレーニングを見る</button>
   </div>
   <div class="card"><h3>部位別トレーニング状況</h3><p class="muted">最終実施日からの経過。タップすると部位別カレンダーを表示します。</p><div id="homePartStatus" class="part-status-grid"><span class="muted">読み込み中…</span></div></div>
   <div class="card"><h3>最近のトレーニング</h3><div id="recentWorkouts" class="list"><span class="muted">記録を読み込み中…</span></div></div>
@@ -171,6 +171,7 @@ window.login=async()=>{
   if(error)msg($("loginMsg"),"ログインできませんでした："+error.message,"error");
 };
 window.logout=async()=>{await supabase.auth.signOut()};
+window.openTodayTraining=()=>{$("listWorkoutDate").value=todayStr();$("trainingEditorView").classList.add("hidden");$("trainingListView").classList.remove("hidden");showTab("trainingTab",document.querySelector('[data-tab="trainingTab"]'));};
 window.startTraining=()=>{editingWorkoutDate=null;editorDirty=false;$("trainingTitle").textContent="トレーニングを追加";$("saveWorkoutBtn").textContent="記録を保存";$("workoutDate").value=$("listWorkoutDate").value||todayStr();$("trainingListView").classList.add("hidden");$("trainingEditorView").classList.remove("hidden");showTab("trainingTab",document.querySelector('[data-tab="trainingTab"]'));clearSetInputs(5);showPrevious()};
 window.backToTrainingList=async()=>{if(editorDirty&&!confirm("入力した内容は保存されていません。破棄して一覧に戻りますか？"))return;editorDirty=false;$("trainingEditorView").classList.add("hidden");$("trainingListView").classList.remove("hidden");await loadTrainingDayList()};
 window.loadTrainingDayList=async()=>{
