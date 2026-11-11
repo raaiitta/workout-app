@@ -445,7 +445,7 @@ async function renderCalendar(){
 }
 window.openPartCalendar=partId=>{$("calendarBodyPart").value=String(partId);showTab("calendarTab",document.querySelector('[data-tab="calendarTab"]'));renderCalendar()};
 window.changeMonth=d=>{currentMonth=new Date(currentMonth.getFullYear(),currentMonth.getMonth()+d,1);renderCalendar()};
-window.openDayFromHome=date=>{currentMonth=new Date(Number(date.slice(0,4)),Number(date.slice(5,7))-1,1);showTab("calendarTab",document.querySelector('[data-tab="calendarTab"]'));selectDay(date)};
+window.openDayFromHome=date=>{$("calendarBodyPart").value="";currentMonth=new Date(Number(date.slice(0,4)),Number(date.slice(5,7))-1,1);showTab("calendarTab",document.querySelector('[data-tab="calendarTab"]'));selectDay(date)};
 window.selectDay=async date=>{
   selectedDate=date;const [y,m,d]=date.split("-").map(Number);
   $("selectedDateTitle").textContent=`${y}年${m}月${d}日の記録`;$("dayRecords").innerHTML='<span class="muted">記録を読み込み中…</span>';
@@ -492,6 +492,7 @@ window.editDayExercise=async(date,exerciseId)=>{
   showToast("過去の記録を編集できます。保存すると選択日の記録が更新されます。");
 };
 window.showTab=(id,btn)=>{
+  if(activeTab==="calendarTab"&&id!=="calendarTab")$("calendarBodyPart").value="";
   if(id!==activeTab){previousTab=activeTab;activeTab=id;}
   ["homeTab","trainingTab","calendarTab","statsTab","settingsTab"].forEach(x=>$(x).classList.toggle("hidden",x!==id));
   document.querySelectorAll(".tabs button").forEach(x=>x.classList.remove("active"));
