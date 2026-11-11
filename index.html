@@ -92,7 +92,7 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
   <div class="card" id="exerciseNoteCard">
     <h3>この種目のフォームメモ</h3>
     <p class="muted">フォームのポイントや意識することを記録できます。次回も同じ種目を選ぶと表示されます。</p>
-    <textarea id="exerciseNote" rows="4" maxlength="2000" placeholder="例：肩甲骨を寄せて胸を張る。下ろす動作はゆっくり。"></textarea>
+    <textarea id="exerciseNote" rows="4" maxlength="2000"></textarea>
     <div id="exerciseNoteStatus" class="muted" style="font-size:12px;margin-top:6px">種目を選択するとメモが表示されます。</div>
     <button class="btn small" style="width:100%;margin-top:10px" onclick="saveExerciseNote()">メモを保存</button>
   </div>
@@ -477,9 +477,16 @@ window.openExerciseHistory=async(exId)=>{
   $("exerciseHistory").innerHTML=dates.map(d=>{
     const arr=grouped[d].sort((a,b)=>Number(a.set_number)-Number(b.set_number));
     const volume=arr.reduce((sum,s)=>sum+Number(s.weight||0)*Number(s.reps||0),0);
-    return `<div class="history-session"><strong>${esc(dateLabel(d))}</strong><div class="muted">${arr.length}セット ・ 合計 ${formatNum(volume)} kg・回</div>${arr.map((s,i)=>`<div>第${Number(s.set_number)||i+1}セット：${formatNum(s.weight)}kg × ${formatNum(s.reps)}回</div>`).join("")}</div>`;
+    return `<button class="history-button" style="text-align:left" onclick="openTrainingDayFromHistory('${d}')"><strong>${esc(dateLabel(d))}</strong><div class="muted">${arr.length}セット ・ 合計 ${formatNum(volume)} kg・回</div>${arr.map((s,i)=>`<div>第${Number(s.set_number)||i+1}セット：${formatNum(s.weight)}kg × ${formatNum(s.reps)}回</div>`).join("")}<div class="muted" style="margin-top:6px">タップしてその日の全記録を確認・編集 ›</div></button>`;
   }).join("")||'<span class="muted">この種目の記録はありません。</span>';
   $("exerciseHistoryBox").scrollIntoView({behavior:"smooth",block:"start"});
+};
+window.openTrainingDayFromHistory=async date=>{
+  $("listWorkoutDate").value=date;
+  $("trainingEditorView").classList.add("hidden");
+  $("trainingListView").classList.remove("hidden");
+  showTab("trainingTab",document.querySelector('[data-tab="trainingTab"]'));
+  await loadTrainingDayList();
 };
 window.closeExerciseHistory=()=>$("exerciseHistoryBox").classList.add("hidden");
 
