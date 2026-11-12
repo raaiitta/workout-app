@@ -114,6 +114,7 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
 
 <section id="statsTab" class="hidden">
   <div class="card"><h2>集計</h2><div class="kpi"><div><b id="weekVol">0</b><span>今週</span></div><div><b id="monthVol">0</b><span>今月</span></div><div><b id="allVol">0</b><span>累計</span></div></div></div>
+  <div class="card"><h3>今週の部位別セット数</h3><p class="muted">月曜日から今日までに実施したセット数です。重量・回数が入力されたセットを集計します。</p><div id="weeklyPartSets" class="list"><span class="muted">集計中…</span></div></div>
   <div class="card"><h3>種目別履歴</h3><p class="muted">部位を選択すると種目ごとの自己ベスト（PR）を確認できます。種目をタップすると日付ごとの記録を確認できます。</p><label>部位</label><select id="historyBodyPart" onchange="renderExerciseHistoryList()"><option value="">部位を選択</option></select><div id="bestList" class="list" style="margin-top:10px"></div></div>
   <div id="exerciseHistoryBox" class="card hidden"><div class="row"><h3 id="exerciseHistoryTitle">種目の履歴</h3><button class="btn small" onclick="closeExerciseHistory()">閉じる</button></div><div id="exerciseHistory" class="list"></div></div>
 </section>
@@ -409,6 +410,21 @@ window.saveWorkout=async()=>{
 };
 
 async function refreshAll(){await loadStats();await renderCalendar();if(currentUser){if(!$("listWorkoutDate").value)$("listWorkoutDate").value=todayStr();await loadTrainingDayList()}}
+function renderWeeklyPartSets(counts){
+  const box=$("weeklyPartSets");
+  if(!box)return;
+  if(!bodyParts.length){
+    box.innerHTML='<span class="muted">部位が登録されていません。</span>';
+    return;
+  }
+  const max=Math.max(1,...bodyParts.map(p=>counts[p.id]||0));
+  box.innerHTML=bodyParts.map(part=>{
+    const count=counts[part.id]||0;
+    const percent=Math.round(count/max*100);
+    return `<div class="item"><div class="row" style="justify-content:space-between"><strong>${esc(part.name)}</strong><b>${count}セット</b></div><div style="height:7px;background:#e5e7eb;border-radius:99px;overflow:hidden;margin-top:8px"><div style="height:100%;width:${percent}%;background:#2563eb;border-radius:99px"></div></div></div>`;
+  }).join("");
+}
+
 async function loadStats(){
   const {data:sessions,error}=await getAllSessions();
   if(error){showToast("集計データを取得できません："+error.message);return}
@@ -418,6 +434,7 @@ async function loadStats(){
     $("homeWeekDays").textContent=$("homeTotalDays").textContent="0日";
     $("homePartStatus").innerHTML=bodyParts.map(p=>`<button class="part-status" onclick="openPartCalendar(${Number(p.id)})"><b>${esc(p.name)}</b><span>未実施</span></button>`).join("");
     $("bestList").innerHTML='<span class="muted">まだ記録がありません。</span>';
+    renderWeeklyPartSets({});
     $("recentWorkouts").innerHTML='<span class="muted">まだ記録がありません。</span>';return;
   }
   const ids=sessions.map(x=>x.id);
@@ -449,6 +466,15 @@ async function loadStats(){
   const {data:allExercises,error:exerciseError}=await supabase.from("exercises").select("id,name,body_part_id");
   if(exerciseError){showToast("種目名を取得できません："+exerciseError.message);return}
   allExercisesCache=allExercises||[];
+  const weeklyPartSets={};
+  (sets||[]).forEach(s=>{
+    const ex=allExercises.find(x=>String(x.id)===String(s.exercise_id));
+    const d=sessionMap[s.session_id]?.workout_date;
+    if(ex&&d&&d>=monday&&d<=todayStr()&&Number(s.weight)>0&&Number(s.reps)>0){
+      weeklyPartSets[ex.body_part_id]=(weeklyPartSets[ex.body_part_id]||0)+1;
+    }
+  });
+  renderWeeklyPartSets(weeklyPartSets);
   const names=Object.fromEntries((allExercises||[]).map(x=>[x.id,x.name]));
   const bodyNames=Object.fromEntries(bodyParts.map(x=>[x.id,x.name]));
   const latestByPart={};
