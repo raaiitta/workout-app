@@ -88,7 +88,7 @@ h2{font-size:17px;margin:3px 0 12px}h3{font-size:15px;margin:0 0 9px}.muted{colo
     <label>日付</label><input id="workoutDate" type="date">
     <label>部位</label><select id="bodyPart" onchange="loadExercises(true)"></select>
     <label>種目</label><select id="exercise" onchange="onExerciseChange()"></select>
-    <div id="previous" class="notice hidden"></div><button id="copyPreviousBtn" class="btn small hidden" style="width:100%;margin-top:8px" onclick="copyPreviousRecord()">前回の記録を複製</button>
+    <div id="previous" class="notice hidden"></div><div id="previousComparison" class="notice hidden" style="background:#f8fafc;color:#17202a"></div><button id="copyPreviousBtn" class="btn small hidden" style="width:100%;margin-top:8px" onclick="copyPreviousRecord()">前回の記録を複製</button>
   </div>
   <div class="card" id="exerciseNoteCard">
     <h3>この種目のフォームメモ</h3>
@@ -144,7 +144,7 @@ const SUPABASE_URL = "https://kksvzdqtueoiengzvgan.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_YNO1159xP98uQ5q9M8fkJQ_MtwnP0ov";
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
-let bodyParts=[], exercises=[], allExercisesCache=[], exerciseVolumes={}, exercisePRs={}, noteExerciseId=null, exerciseNoteDirty=false, currentMonth=new Date(new Date().getFullYear(),new Date().getMonth(),1), selectedDate=null, currentUser=null, editingWorkoutDate=null, activeTab="homeTab", previousTab="homeTab", editorDirty=false;
+let bodyParts=[], exercises=[], allExercisesCache=[], exerciseVolumes={}, exercisePRs={}, previousComparisonData=null, noteExerciseId=null, exerciseNoteDirty=false, currentMonth=new Date(new Date().getFullYear(),new Date().getMonth(),1), selectedDate=null, currentUser=null, editingWorkoutDate=null, activeTab="homeTab", previousTab="homeTab", editorDirty=false;
 const $=id=>document.getElementById(id);
 const todayStr=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
 $("workoutDate").value=todayStr();
@@ -285,15 +285,31 @@ window.onExerciseChange=async()=>{
 $("workoutDate").addEventListener("change",()=>{if(!$("trainingEditorView").classList.contains("hidden"))editorDirty=true;clearSetInputs(5);showPrevious()});
 $("bodyPart").addEventListener("change",()=>{if(!$("trainingEditorView").classList.contains("hidden"))editorDirty=true});
 
+function renderPreviousComparison(){
+  const box=$("previousComparison"),prev=previousComparisonData;
+  if(!prev?.sets?.length){box.classList.add("hidden");box.textContent="";return}
+  let currentVolume=0,currentSets=0;
+  document.querySelectorAll(".set-row").forEach(r=>{
+    const w=Number(r.querySelector(".weight").value||0),reps=Number(r.querySelector(".reps").value||0);
+    if(w>0&&reps>0){currentSets++;currentVolume+=w*reps}
+  });
+  const previousVolume=prev.sets.reduce((sum,x)=>sum+Number(x.weight||0)*Number(x.reps||0),0);
+  const diff=currentVolume-previousVolume,sign=diff>0?"+":"";
+  const volumeText=currentSets?`${sign}${formatNum(diff)} kg・回`:"入力すると比較できます";
+  box.className="notice"+(diff>0&&currentSets?" success":"");
+  box.innerHTML=`<strong>前回との比較（${esc(dateLabel(prev.date))}）</strong><br>前回：${formatNum(previousVolume)} kg・回（${prev.sets.length}セット）<br>今回：${formatNum(currentVolume)} kg・回（${currentSets}セット）<br><strong>差：${volumeText}</strong>`;
+}
 window.showPrevious=async()=>{
   const ex=Number($("exercise").value),date=$("workoutDate").value;
-  if(!ex){$("previous").classList.add("hidden");$("copyPreviousBtn").classList.add("hidden");$("bestVolume").textContent="-";return}
+  if(!ex){previousComparisonData=null;$("previousComparison").classList.add("hidden");$("previous").classList.add("hidden");$("copyPreviousBtn").classList.add("hidden");$("bestVolume").textContent="-";return}
   const prev=await getPreviousSession(ex,date);
+  previousComparisonData=prev.error?null:prev;
   if(prev.error){$("previous").classList.remove("hidden");$("previous").textContent="前回の記録を取得できません："+prev.error;return}
   if(prev.sets.length){
     $("previous").classList.remove("hidden");$("copyPreviousBtn").classList.remove("hidden");
     $("previous").innerHTML=`<strong>前回：${esc(dateLabel(prev.date))}（${esc(elapsedLabel(prev.date))}）</strong><br>${prev.sets.map((s,i)=>`第${Number(s.set_number)||i+1}セット：${formatNum(s.weight)}kg × ${formatNum(s.reps)}回`).join("<br>")}`;
   }else{$("previous").classList.add("hidden");$("copyPreviousBtn").classList.add("hidden");$("previous").textContent=""}
+  renderPreviousComparison();
   await updateBestVolume(ex);
 };
 async function getPreviousSession(ex,date){
@@ -333,7 +349,7 @@ function renumber(){[...document.querySelectorAll(".set-row")].forEach((r,i)=>r.
 function updateVolume(){
   let volume=0,count=0;
   document.querySelectorAll(".set-row").forEach(r=>{const w=Number(r.querySelector(".weight").value||0),reps=Number(r.querySelector(".reps").value||0);if(w>0&&reps>0)count++;volume+=w*reps});
-  $("volume").textContent=formatNum(volume);$("setCount").textContent=count;
+  $("volume").textContent=formatNum(volume);$("setCount").textContent=count;renderPreviousComparison();
 }
 document.addEventListener("input",e=>{if(e.target.matches(".weight,.reps")){editorDirty=true;updateVolume()}});
 
